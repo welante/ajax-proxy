@@ -1,6 +1,6 @@
 <?php
 /**
- * 
+ *
  * LICENSE
  *
  * This source file is subject to the new BSD license that is bundled
@@ -22,7 +22,7 @@
  * The heart of the functionality of this script is self-contained, reusable
  *  proxy class. This class could very easily be incorporated into an MVC
  *  framework or set of libraries.
- * 
+ *
  * @todo Finalize licensing above
  * @package IceCube
  * @copyright Copyright (c) 2010 HUGE LLC (http://hugeinc.com)
@@ -40,7 +40,7 @@
  *
  * There is an option to restrict requests so that they can only be made from
  *  certain hostnames or ips in the constructor
- * 
+ *
  * @author Kenny Katzgrau <kkatzgrau@hugeinc.com>
  */
 class AjaxProxy
@@ -92,13 +92,6 @@ class AjaxProxy
      * @var string
      */
     protected $_requestUserAgent  = NULL;
-
-    /**
-     * Will hold the raw HTTP response (headers and all) sent back by the server
-     *  that the proxy request was made to
-     * @var string
-     */
-    protected $_rawResponse       = NULL;
 
     /**
      * Will hold the response body sent back by the server that the proxy
@@ -156,7 +149,7 @@ class AjaxProxy
             else
                 $this->_allowedHostnames = array($allowed_hostnames);
         }
-        
+
         if($handle_errors)
             $this->_setErrorHandlers();
     }
@@ -170,7 +163,7 @@ class AjaxProxy
     {
             $this->_checkPermissions();
             $this->_gatherRequestInfo();
-            $this->_makeRequest();
+            $this->_makeCurlRequest($this->_forwardHost . $this->_route);
             $this->_parseResponse();
             $this->_buildAndExecuteProxyResponse();
     }
@@ -235,7 +228,7 @@ class AjaxProxy
     /**
      * Get the request body raw from the PHP input stream and store it in the
      *  _requestBody property.
-     * 
+     *
      * There have been concerns with blindly reading the entirety of an input
      *  stream with no maximum length, but this is limited with the maximum
      *  request size in php.ini. Additionally, Zend_Amf_Request_Http does the
@@ -310,6 +303,30 @@ class AjaxProxy
     }
 
     /**
+     * Fetch all HTTP request headers
+     * @return array of all HTTP headers
+     */
+    protected function _getallheaders()
+    {
+        if (!function_exists('getallheaders'))
+        {
+           $headers = '';
+           foreach ($_SERVER as $name => $value)
+           {
+               if (substr($name, 0, 5) == 'HTTP_')
+               {
+                   $headers[str_replace(' ', '-', ucwords(strtolower(str_replace('_', ' ', substr($name, 5)))))] = $value;
+               }
+           }
+           return $headers;
+        }
+        else
+        {
+            return getallheaders();
+        }
+    }
+
+    /**
      * Load raw headers into the _rawHeaders property.
      *  This method REQUIRES APACHE
      * @throws Exception When we can't load request headers (perhaps when Apache
@@ -318,8 +335,8 @@ class AjaxProxy
     protected function _loadRawHeaders()
     {
         if($this->_rawHeaders !== NULL) return;
-        
-        $this->_rawHeaders = getallheaders();
+
+        $this->_rawHeaders = $this->_getallheaders();
 
         if($this->_rawHeaders === FALSE)
             throw new Exception("Could not get request headers");
@@ -346,21 +363,6 @@ class AjaxProxy
     }
 
     /**
-     * Make the proxy request using the supplied route and the base host we got
-     *  in the constructor. Store the response in _rawResponse
-     */
-    protected function _makeRequest()
-    {
-        $url = $this->_forwardHost . $this->_route;
-
-        # Check for cURL. If it isn't loaded, fall back to fopen()
-        if(function_exists('curl_init'))
-            $this->_rawResponse = $this->_makeCurlRequest($url);
-        else
-            $this->_rawResponse = $this->_makeFOpenRequest($url);
-    }
-
-    /**
      * Given the object's current settings, make a request to the given url
      *  using the cURL library
      * @param string $url The url to make the request to
@@ -378,44 +380,50 @@ class AjaxProxy
             curl_setopt($curl_handle, CURLOPT_POST, true);
             curl_setopt($curl_handle, CURLOPT_POSTFIELDS, $this->_requestBody);
         }
+        if($this->_requestMethod === self::REQUEST_METHOD_PUT)
+        {
+            // Using a PUT method i.e. -XPUT
+            curl_setopt($curl_handle, CURLOPT_CUSTOMREQUEST, 'PUT');
+            if ( $this->_requestBody )
+            {
+                curl_setopt($curl_handle, CURLOPT_POSTFIELDS, http_build_query(json_decode($this->_requestBody, true)));
+            }
+        }
+
+        $headers = $this->_generateProxyRequestHeaders();
+
+        $headers[] = 'REMOTE_ADDR: ' . getenv('REMOTE_ADDR');
+        $headers[] = 'X_FORWARDED_FOR: ' . getenv('REMOTE_ADDR');
+        $headers[] = 'X-APP-IP: ' . getenv('REMOTE_ADDR');
 
         curl_setopt($curl_handle, CURLOPT_HEADER, true);
         curl_setopt($curl_handle, CURLOPT_USERAGENT, $this->_requestUserAgent);
         curl_setopt($curl_handle, CURLOPT_RETURNTRANSFER, true);
         curl_setopt($curl_handle, CURLOPT_COOKIE, $this->_buildProxyRequestCookieString());
-        curl_setopt($curl_handle, CURLOPT_HTTPHEADER, $this->_generateProxyRequestHeaders());
+        curl_setopt($curl_handle, CURLOPT_HTTPHEADER, $headers);
+        curl_setopt($curl_handle, CURLOPT_SSL_VERIFYPEER, false);
+        curl_setopt($curl_handle, CURLOPT_SSL_VERIFYHOST, false);
+        curl_setopt($curl_handle, CURLOPT_VERBOSE, 1);
+        curl_setopt($curl_handle, CURLOPT_HEADER, 1);
 
-        return curl_exec($curl_handle);
-    }
+        $ret = curl_exec($curl_handle);
 
-    /**
-     * Given the object's current settings, make a request to the supplied url
-     *  using PHP's native, less speedy, fopen functions
-     * @param string $url The url to make the request to
-     * @return string The full HTTP response
-     */
-    protected function _makeFOpenRequest($url)
-    {
-        $context      = $this->_buildFOpenStreamContext();
-        $file_pointer = @fopen($url, 'r', null, $context);
+        // get headers and body
+        $header_size = curl_getinfo($curl_handle, CURLINFO_HEADER_SIZE);
+        $respheaders = substr($ret, 0, $header_size);
+        $content = substr($ret, $header_size);
 
-        if(!$file_pointer)
-            throw new Exception("There was an error making the request. Make sure that the url is valid, and either fopen or cURL are available.");
+        $this->_responseHeaders = $respheaders;
+        $this->_responseBody = $content;
 
-        $meta    = stream_get_meta_data($file_pointer);
-        $headers = $this->_buildResponseHeaderFromMeta($meta);
-        $content = stream_get_contents($file_pointer);
-
-        fclose($file_pointer);
-
-        return "$headers\r\n\r\n$content";
+        return $ret;
     }
 
     /**
      * Given an associative array returned by PHP's methods to get stream meta,
      *  extract the HTTP response header from it
      * @param array $meta The associative array contianing stream information
-     * @return array 
+     * @return array
      */
     protected function _buildResponseHeaderFromMeta($meta)
     {
@@ -446,35 +454,6 @@ class AjaxProxy
     }
 
     /**
-     * Given the object's current settings, build a context array for PHP's
-     *  fopen() methods to work with
-     * @return array The associative array containing context information
-     */
-    protected function _buildFOpenStreamContext()
-    {
-        # Set the headers required to work with fopen
-        $headers =  $this->_generateProxyRequestHeaders(TRUE);
-        $headers.= 'Cookie: ' . $this->_buildProxyRequestCookieString();
-
-        # Create the stream context
-        $stream_context = array (
-            'header'        => $headers,
-            'user_agent'    => $this->_requestUserAgent
-        );
-
-        # Figure out what kind of request we're making, and what to fill it with
-        $stream_context['method'] = $this->_getStringFromRequestType($this->_requestMethod);
-
-        if($this->_requestMethod === self::REQUEST_METHOD_POST ||
-           $this->_requestMethod === self::REQUEST_METHOD_PUT)
-        {
-            $stream_context['content'] = $this->_requestBody;
-        }
-
-        return stream_context_create(array('http' => $stream_context));
-    }
-
-    /**
      * Parse the headers and the body out of the raw response sent back by the
      *  server. Store them in _responseHeaders and _responseBody.
      * @throws Exception When the server does not give us a valid response
@@ -485,65 +464,49 @@ class AjaxProxy
          * According to the HTTP spec, we have to respect \n\n too
          *  @todo: Respect \n\n
          */
-        $break_1 = strpos($this->_rawResponse, "\r\n\r\n");
-        $break_2 = strpos($this->_rawResponse, "\n\n");
-        $break   = 0;
-
-        if    ($break_1 && $break_2 === FALSE) $break = $break_1;
-        elseif($break_2 && $break_1 === FALSE) $break = $break_2;
-        elseif($break_1 < $break_2) $break = $break_1;
-        else $break = $break_2;
-        
-        # Let's check to see if we recieved a header but no body
-        if($break === FALSE)
+         if ( !$this->_responseBody )
         {
-            $look_for = 'HTTP/';
-
-            if(strpos($this->_rawResponse, $look_for) !== FALSE)
-                $break = strlen($this->_rawResponse);
-            else
                 throw new Exception("A valid response was not received from the host");
         }
 
-        $header = substr($this->_rawResponse, 0, $break);
-        $this->_responseHeaders = $this->_parseResponseHeaders($header);
-        $this->_responseBody    = substr($this->_rawResponse, $break + 3);
+        $this->_parseResponseData();
     }
 
-    /**
-     * Parse out the headers from the response and store them in a key-value
-     *  array and return it
-     * @param string $headers A big chunk of text representing the HTTP headers
-     * @return array A key-value array containing heder names and values
-     */
-    protected function _parseResponseHeaders($headers)
+    protected function _parseResponseData()
     {
-        $headers = str_replace("\r", "", $headers);
-        $headers = explode("\n", $headers);
-        $parsed  = array();
-
-        foreach($headers as $header)
+        $parsed = array();
+        foreach(explode("\r\n", $this->_responseHeaders) as $header)
         {
             $field_end = strpos($header, ':');
 
-            if($field_end === FALSE)
+            if($field_end === FALSE && $header)
             {
                 /* Cover the case where we're at the first header, the HTTP
                  *  status header
                  */
                 $field = 'status';
                 $value = $header;
+
+                preg_match("/^HTTP.+ (?P<status>\d{3})/i", $header, $matches);
+                if ( isset($matches['status']) && is_numeric($matches['status']) )
+                {
+                    // set HTTP Status
+                    http_response_code(intval($matches['status']));
+                    $parsed[$field] = trim($matches[0]);
+                }
             }
             else
             {
                 $field = substr($header, 0, $field_end);
                 $value = substr($header, $field_end + 1);
+                if ( $field && $value )
+                {
+                    $parsed[$field] = trim($value);
+                }
             }
-            
-            $parsed[$field] = $value;
         }
 
-        return $parsed;
+        $this->_responseHeaders = $parsed;
     }
 
     /**
@@ -593,7 +556,7 @@ class AjaxProxy
     {
         foreach($this->_responseHeaders as $name => $value)
         {
-            if($name != 'status')
+            if($name != 'status' && $name != 'Content-Length')
                 header("$name: $value");
         }
     }
@@ -604,24 +567,14 @@ class AjaxProxy
     protected function _buildAndExecuteProxyResponse()
     {
         $this->_generateProxyResponseHeaders();
-        
-        $this->_output($this->_responseBody);
-    }
 
-    /**
-     * A wrapper method for something like 'echo', simply to void having
-     *  echo's in different parts of the code
-     * @param mixed $data Data to dump to the output stream
-     */
-    protected function _output($data)
-    {
-        echo $data;
+        echo $this->_responseBody;
     }
 
     /**
      * Make it so that this class handles it's own errors. This means that
      *  it will register PHP error and exception handlers, and die() if there
-     *  is a problem. 
+     *  is a problem.
      */
     protected function _setErrorHandlers()
     {
@@ -666,10 +619,3 @@ class AjaxProxy
         die($message);
     }
 }
-
-/**
- * Here's the actual script part. Comment it out or remove it if you simply want
- *  the class' functionality
- */
-$proxy = new AjaxProxy('http://login.example.com/');
-$proxy->execute();
