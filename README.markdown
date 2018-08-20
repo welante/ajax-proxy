@@ -1,4 +1,4 @@
-# ajax-proxy
+# welante ajax-proxy
 
 An extensively easy-to-use proxy class and script for facilitating cross-domain
 ajax calls that **supports cookies** and has minimal dependencies
@@ -26,82 +26,21 @@ also be used alone.
 
 ## Scenario
 
-Suppose we were writing the client-side portion of fun.example.com. If the site
-relies on ajax-based logins, and the login controller/authority is at
-login.example.com, then we're going to have trouble making logins work accross
-domains.
+Suppose we were writing the client-side portion of the customers website www.example.com. If the site
+creates ajax-based requests to welante eg. at subdoamin.example.com, then we're going to have trouble
+making requests work accross domains.
 
 This is where the proxy comes in. We want to have ajax requests sent to
-fun.example.com, and then routed, or 'proxied' to login.example.com
+www.example.com, and then routed, or 'proxied' to subdomain.example.com
 
 ## Setup
 
-In this package, /src/proxy.php is the standalone class and script. We would
-place this script at a location on fun.example.com, perhaps at
-fun.example.com/proxy.php
+In this package, proxy.php is the standalone class and script. We would
+place this script at a location on www.example.com, perhaps at
+www.example.com/welante-api/proxy.php together with .htaccess and index.php
 
-At the bottom of proxy.php, there are two lines of code:
-
-    $proxy = new AjaxProxy('http://login.example.com/');
-    $proxy->execute();
-
-The first line created the proxy object. The proxy object performs the entirety
-of the work. The AjaxProxy class' constructor takes 3 arguments, the last of
-which is optional.
-
-1. `$forward_host`, which is where all requests to the proxy will be routed.
-2. `$allowed_hostname`, which an optional parameter. Is this is supplied, it
-   should be a hostname or ip address that you would like to restrict requests
-   to. Alternatively, it can be an array of hostnames or IPs. This way, you can
-   make sure that only requests from certain clients ever access the proxy.
-3. `$handle_errors`, which is a boolean flag with a default value of TRUE. If
-   enabled, the object will use it's own error and exception handlers. This is
-   useful if you plan to use proxy.php as a standalone script. If you are
-   incorporating the class into a larger framework, although, you will likely
-   want to specify false so it does not override any error and exception
-   handling in your application.
-
-The second line executes the proxy request. In the event of failure, the proxy
-will halt and produce an error message. Error messages in this application are
-generally very specific.
-
-Finally, in the javascript, suppose you initially wanted to make requests to
-login.example.com/user/auth. From the ajax, you would now call
-fun.example.com/proxy.php?route=user/auth . The route parameter will be
-concatenated with the `$forward_host` argument in the proxy's contructor to
-produce a final url. The request will be made and the response will be sent back
-to the client.
-
-Note that the lines at the bottom of proxy.php may be removed if you want to
-incorporate the class into a larger application or framework.
-
-## Gotchas
-
-If you are using this proxy and you expect to use cookies, make sure that your
-web application is not validating cookies by IP address. This is a common
-setting in web frameworks such as CodeIgniter and Kohana which can be easily
-disabled. Validations such as cookie-expiration and user-agent are acceptable.
-
-Another gotcha with cookies: Make sure that cookies being emitted from the
-target server are going to be accepted by the client. That is, if
-login.example.com will be sending authentication or session cookies, make sure
-they have an appropriate cookies domain set so that the client's browser will
-accept them at fun.example.com (for example, a domain of '*.example.com' would
-work fine.
-
-When it comes to passing routes, always make sure to urlencode them. This is
-especially true if there is a query string in your route. For example, suppose
-you had a route that looks like:
-
-    ajax/user/login?param_a=1&param_b=2
-
-This is a **malformed** call to the proxy:
-
-    http://proxy-location.com/proxy.php?route=ajax/user/login?param_a=1&param_b=2
-
-This is a **well-formed** call to the proxy:
-
-    http://proxy-location.com/proxy.php?route=ajax%2fuser%2flogin%3fparam_a%3d1%26param_b%3d2
+In index.php, there are is a variable $subdomain. Enter the welante subdomain there
+so the proxy creates the correct calls.
 
 ## Dependencies
 
