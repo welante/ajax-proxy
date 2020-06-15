@@ -11,6 +11,6 @@ require('proxy.php');
 // get route relative to script name
 $_GET['route'] = '/' . str_replace('/welante-api/', '', $_SERVER['REQUEST_URI']);
 
-$proxy = new AjaxProxy('https://' . $subdomain . '/api.php');
+$proxy = new AjaxProxy('https://' . $subdomain . '.welante.ch/api.php');
 
 $proxy->execute();
