@@ -1,4 +1,8 @@
 <?php
+// ini_set('display_errors', 1);
+// ini_set('display_startup_errors', 1);
+// error_reporting(E_ALL);
+
 /**
  *
  * LICENSE
@@ -51,13 +55,6 @@ class AjaxProxy
     const REQUEST_METHOD_DELETE  = 4;
 
     /**
-     * Will hold the hostname or IP address of the machin allowed to access this
-     *  proxy
-     * @var string
-     */
-    protected $_allowedHostnames  = NULL;
-
-    /**
      * Will hold the host where proxy requests will be forwarded to
      * @var string
      */
@@ -70,22 +67,10 @@ class AjaxProxy
     protected $_requestMethod     = NULL;
 
     /**
-     * Will hold the cookies submitted by the client for the proxy request
-     * @var string
-     */
-    protected $_requestCookies    = NULL;
-
-    /**
      * Will hold the body of the request submitted by the client
      * @var string
      */
     protected $_requestBody       = NULL;
-
-    /**
-     * Will hold the content type of the request submitted by the client
-     * @var string
-     */
-    protected $_requestContentType= NULL;
 
     /**
      * Will hold the user-agent string submitted by the client
@@ -126,32 +111,10 @@ class AjaxProxy
      * @param string $forward_host The base address that all requests will be
      *  forwarded to. Must not end in a trailing slash.
      *
-     * @param string|array $allowed_hostname If you want to restrict proxy
-     *  requests to only come from a certain hostname or IP, you can supply
-     *  a single hostname as a string, or an array of hostnames.
-     *
-     * @param bool $handle_errors This should be true if you want this class to
-     *  catch and handle it's own errors and exception. This makes sense if you
-     *  are using this class as a standalone script. If you are using it in a
-     *  larger application with it's own error and exception handling, you
-     *  should set this to false, or it will override your settings.
      */
-    public function  __construct(   $forward_host,
-                                    $allowed_hostnames = NULL,
-                                    $handle_errors     = TRUE)
+    public function  __construct($forward_host)
     {
         $this->_forwardHost = $forward_host;
-
-        if($allowed_hostnames !== NULL)
-        {
-            if(is_array($allowed_hostnames))
-                $this->_allowedHostnames = $allowed_hostnames;
-            else
-                $this->_allowedHostnames = array($allowed_hostnames);
-        }
-
-        if($handle_errors)
-            $this->_setErrorHandlers();
     }
 
     /**
@@ -161,10 +124,9 @@ class AjaxProxy
      */
     public function execute()
     {
-            $this->_checkPermissions();
             $this->_gatherRequestInfo();
             $this->_makeCurlRequest($this->_forwardHost . $this->_route);
-            $this->_parseResponse();
+            $this->_parseResponseData();
             $this->_buildAndExecuteProxyResponse();
     }
 
@@ -199,10 +161,7 @@ class AjaxProxy
     protected function _gatherRequestInfo()
     {
         $this->_loadRequestMethod();
-        $this->_loadRequestCookies();
-        $this->_loadRequestUserAgent();
         $this->_loadRawHeaders();
-        $this->_loadContentType();
         $this->_loadRoute();
 
         if($this->_requestMethod === self::REQUEST_METHOD_POST
@@ -219,8 +178,9 @@ class AjaxProxy
      */
     protected function _loadRoute()
     {
-        if(!key_exists('route', $_GET))
+        if(!key_exists('route', $_GET)) {
             throw new Exception("You must supply a 'route' parameter in the request");
+        }
 
         $this->_route = $_GET['route'];
     }
@@ -267,42 +227,6 @@ class AjaxProxy
     }
 
     /**
-     * Loads the user-agent string into the _requestUserAgent property
-     * @throws Exception When the user agent is not sent by the client
-     */
-    protected function _loadRequestUserAgent()
-    {
-        if($this->_requestUserAgent !== NULL) return;
-
-        if(! key_exists('HTTP_USER_AGENT', $_SERVER))
-            throw new Exception("No HTTP User Agent was found");
-
-        $this->_requestUserAgent = $_SERVER['HTTP_USER_AGENT'];
-    }
-
-    /**
-     * Store the cookie array into the _requestCookies
-     *  property
-     */
-    protected function _loadRequestCookies()
-    {
-        if($this->_requestCookies !== NULL) return;
-
-        $this->_requestCookies = $_COOKIE;
-    }
-
-    /**
-     * Load the content type into the _requestContentType property
-     */
-    protected function _loadContentType()
-    {
-        $this->_loadRawHeaders();
-
-        if(key_exists('Content-Type', $this->_rawHeaders))
-            $this->_requestContentType = $this->_rawHeaders['Content-Type'];
-    }
-
-    /**
      * Fetch all HTTP request headers
      * @return array of all HTTP headers
      */
@@ -342,24 +266,10 @@ class AjaxProxy
             throw new Exception("Could not get request headers");
     }
 
-    /**
-     * Check that the proxy request is coming from the appropriate host
-     *  that was set in the second argument of the constructor
-     * @return void
-     * @throws Exception when a client hostname is not permitted on a request
-     */
-    protected function _checkPermissions()
+    private function isJson($string)
     {
-        if($this->_allowedHostnames === NULL)
-            return;
-
-        if(key_exists('REMOTE_HOST', $_SERVER))
-            $host = $_SERVER['REMOTE_HOST'];
-        else
-            $host = $_SERVER['REMOTE_ADDR'];
-
-        if(!in_array($host, $this->_allowedHostnames))
-            throw new Exception("Requests from hostname ($host) are not allowed");
+        json_decode($string, true);
+        return json_last_error() == JSON_ERROR_NONE;
     }
 
     /**
@@ -371,9 +281,9 @@ class AjaxProxy
     protected function _makeCurlRequest($url)
     {
         $curl_handle = curl_init($url);
+
         /**
          * Check to see if this is a POST request
-         * @todo What should we do for PUTs? Others?
          */
         if($this->_requestMethod === self::REQUEST_METHOD_POST)
         {
@@ -386,30 +296,37 @@ class AjaxProxy
             curl_setopt($curl_handle, CURLOPT_CUSTOMREQUEST, 'PUT');
             if ( $this->_requestBody )
             {
-                curl_setopt($curl_handle, CURLOPT_POSTFIELDS, http_build_query(json_decode($this->_requestBody, true)));
+                $requestquery = $this->isJson($this->_requestBody) ? http_build_query(json_decode($this->_requestBody, true)) : $this->_requestBody;
+                curl_setopt($curl_handle, CURLOPT_POSTFIELDS, $requestquery);
             }
         }
+        if($this->_requestMethod === self::REQUEST_METHOD_DELETE)
+        {
+            curl_setopt($curl_handle, CURLOPT_CUSTOMREQUEST, 'DELETE');
+        }
+
+        curl_setopt($curl_handle, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($curl_handle, CURLOPT_SSL_VERIFYPEER, false);
+        curl_setopt($curl_handle, CURLOPT_SSL_VERIFYHOST, false);
+        // don't log in apache error log
+        curl_setopt($curl_handle, CURLOPT_VERBOSE, false);
+        curl_setopt($curl_handle, CURLOPT_HEADER, true);
+
+        curl_setopt($curl_handle, CURLOPT_COOKIE, $this->_buildProxyRequestCookieString());
 
         $headers = $this->_generateProxyRequestHeaders();
 
         $headers[] = 'REMOTE_ADDR: ' . getenv('REMOTE_ADDR');
         $headers[] = 'X-Forwarded-For: ' . getenv('REMOTE_ADDR');
         $headers[] = 'X-app-ip: ' . getenv('REMOTE_ADDR');
-
-        curl_setopt($curl_handle, CURLOPT_HEADER, true);
-        curl_setopt($curl_handle, CURLOPT_USERAGENT, $this->_requestUserAgent);
-        curl_setopt($curl_handle, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($curl_handle, CURLOPT_COOKIE, $this->_buildProxyRequestCookieString());
+        $headers[] = 'X-app-hostname: ' . getenv('HTTP_HOST');
         curl_setopt($curl_handle, CURLOPT_HTTPHEADER, $headers);
-        curl_setopt($curl_handle, CURLOPT_SSL_VERIFYPEER, false);
-        curl_setopt($curl_handle, CURLOPT_SSL_VERIFYHOST, false);
-        curl_setopt($curl_handle, CURLOPT_VERBOSE, 1);
-        curl_setopt($curl_handle, CURLOPT_HEADER, 1);
 
         $ret = curl_exec($curl_handle);
 
         // get headers and body
         $header_size = curl_getinfo($curl_handle, CURLINFO_HEADER_SIZE);
+        curl_close($curl_handle);
         $respheaders = substr($ret, 0, $header_size);
         $content = substr($ret, $header_size);
 
@@ -453,25 +370,6 @@ class AjaxProxy
         return implode("\n", $headers);
     }
 
-    /**
-     * Parse the headers and the body out of the raw response sent back by the
-     *  server. Store them in _responseHeaders and _responseBody.
-     * @throws Exception When the server does not give us a valid response
-     */
-    protected function _parseResponse()
-    {
-        /**
-         * According to the HTTP spec, we have to respect \n\n too
-         *  @todo: Respect \n\n
-         */
-         if ( !$this->_responseBody )
-        {
-                throw new Exception("A valid response was not received from the host");
-        }
-
-        $this->_parseResponseData();
-    }
-
     protected function _parseResponseData()
     {
         $parsed = array();
@@ -506,6 +404,10 @@ class AjaxProxy
             }
         }
 
+        if ( isset($parsed['Transfer-Encoding']) ) {
+            unset($parsed['Transfer-Encoding']);
+        }
+
         $this->_responseHeaders = $parsed;
     }
 
@@ -515,19 +417,21 @@ class AjaxProxy
      *  of an associative array
      * @return array|string
      */
-    protected function _generateProxyRequestHeaders($as_string = FALSE)
+    protected function _generateProxyRequestHeaders()
     {
-        $headers                 = array();
-        $headers['Content-Type'] = $this->_requestContentType;
+        $this->_loadRawHeaders();
 
-        if($as_string)
-        {
-            $data = "";
-            foreach($headers as $name => $value)
-                if($value)
-                    $data .= "$name: $value\n";
-
-            $headers = $data;
+        $headers = array();
+        $ignores = [
+            'Host',
+            'Connection',
+            'Upgrade-Insecure-Requests',
+        ];
+        foreach ( $this->_rawHeaders as $key => $value ) {
+            if ( in_array($key, $ignores) ) {
+                continue;
+            }
+            $headers[] = $key . ': ' . $value;
         }
 
         return $headers;
@@ -540,12 +444,15 @@ class AjaxProxy
      */
     protected function _buildProxyRequestCookieString()
     {
-        $cookie_string  = '';
+        $this->_loadRawHeaders();
 
-        if(key_exists('Cookie', $this->_rawHeaders))
-            $cookie_string = $this->_rawHeaders['Cookie'];
+        if(key_exists('Cookie', $this->_rawHeaders)) {
+            $cookie = $this->_rawHeaders['Cookie'];
+            unset($this->_rawHeaders['Cookie']);
+            return $cookie;
+        }
 
-        return $cookie_string;
+        return '';
     }
 
     /**
@@ -569,53 +476,5 @@ class AjaxProxy
         $this->_generateProxyResponseHeaders();
 
         echo $this->_responseBody;
-    }
-
-    /**
-     * Make it so that this class handles it's own errors. This means that
-     *  it will register PHP error and exception handlers, and die() if there
-     *  is a problem.
-     */
-    protected function _setErrorHandlers()
-    {
-        set_error_handler(array($this, 'handleError'));
-        set_exception_handler(array($this, 'handleException'));
-    }
-
-    /**
-     * A callback method for PHP's set_error_handler function. Used to handle
-     *  application-wide errors
-     * @param int       $code
-     * @param string    $message
-     * @param string    $file
-     * @param int       $line
-     */
-    public function handleError($code, $message, $file, $line)
-    {
-        $this->_sendFatalError("Fatal proxy Error: '$message' in $file:$line");
-    }
-
-    /**
-     * A callback method for PHP's set_exception_handler function. Used to
-     *  handle application-wide exceptions.
-     * @param Exception $exception The exception being thrown
-     */
-    public function handleException(Exception $exception)
-    {
-        $this->_sendFatalError("Fatal proxy Exception: '"
-                               . $exception->getMessage()
-                               . "' in "
-                               . $exception->getFile()
-                               . ":"
-                               . $exception->getLine());
-    }
-
-    /**
-     * Display a fatal error to the user. This will halt execution.
-     * @param string $message
-     */
-    protected static function _sendFatalError($message)
-    {
-        die($message);
     }
 }
